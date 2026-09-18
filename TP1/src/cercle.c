@@ -1,10 +1,18 @@
 #include <stdio.h>
-#include <string.h>
 
 int main() {
-double pi = 3.1416;
-double r = 6;  
-    printf("L'air du cercle = %f", pi*(r*r));
-   printf("Le périmètre du cercle = %f", pi*(r+r));
+    const double pi = 3.14159;
+    double rayon;
+    double aire;
+    double perimetre;
+
+    printf("Entrez le rayon du cercle : ");
+    scanf("%lf", &rayon);
+
+    aire = pi * rayon * rayon;
+    perimetre = 2 * pi * rayon;
+
+    printf("Aire du cercle = %.2f\n", aire);
+    printf("Perimetre du cercle = %.2f\n", perimetre);
 }
 
