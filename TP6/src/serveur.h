@@ -9,14 +9,9 @@
 #define __SERVER_H__
 
 #define PORT 8089
+#define SVG_FILE_PATH "pie_chart.svg"
 
-/* accepter la nouvelle connection d'un client et lire les données
- * envoyées par le client. En suite, le serveur envoie un message
- * en retour
- */
-
-const char *svg_file_path = "pie_chart.svg";
-
-int recois_envoie_message(int, char[1024]);
+int renvoie_message(int, char *);
+int recois_envoie_message(int, char *);
 
 #endif

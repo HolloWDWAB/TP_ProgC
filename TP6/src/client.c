@@ -5,102 +5,174 @@
  *
  */
 
-#include <string.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <sys/types.h>
+#include <string.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#include "client.h"
 #include "bmp.h"
+#include "client.h"
 
-/*
- * Fonction d'envoi et de réception de messages
- * Il faut un argument : l'identifiant de la socket
- */
+static int compare_couleur24_compteur(const void *a, const void *b)
+{
+  const couleur24_compteur *ca = (const couleur24_compteur *)a;
+  const couleur24_compteur *cb = (const couleur24_compteur *)b;
+
+  if (ca->compte < cb->compte)
+    return 1;
+  if (ca->compte > cb->compte)
+    return -1;
+  return 0;
+}
+
+static int compare_couleur32_compteur(const void *a, const void *b)
+{
+  const couleur32_compteur *ca = (const couleur32_compteur *)a;
+  const couleur32_compteur *cb = (const couleur32_compteur *)b;
+
+  if (ca->compte < cb->compte)
+    return 1;
+  if (ca->compte > cb->compte)
+    return -1;
+  return 0;
+}
+
+static void couleur_to_hex24(char *buffer, size_t size, const couleur24 *couleur)
+{
+  snprintf(buffer, size, "#%02x%02x%02x", couleur->rouge, couleur->vert, couleur->bleu);
+}
+
+static void couleur_to_hex32(char *buffer, size_t size, const couleur32 *couleur)
+{
+  snprintf(buffer, size, "#%02x%02x%02x", couleur->rouge, couleur->vert, couleur->bleu);
+}
+
+static void remplir_palette_bmp(const char *pathname, int nombre_couleurs, char *data, size_t data_size)
+{
+  couleur_compteur *cc = analyse_bmp_image((char *)pathname);
+  int i;
+  size_t offset = 0;
+
+  if (cc == NULL)
+  {
+    snprintf(data, data_size, "couleurs:0:");
+    return;
+  }
+
+  if (cc->compte_bit == BITS24)
+  {
+    couleur24_compteur *copie = malloc(sizeof(couleur24_compteur) * (size_t)cc->size);
+    if (copie == NULL)
+    {
+      fprintf(stderr, "Erreur d'allocation pour la palette\n");
+      snprintf(data, data_size, "couleurs:0:");
+      return;
+    }
+
+    memcpy(copie, cc->cc.cc24, sizeof(couleur24_compteur) * (size_t)cc->size);
+    qsort(copie, (size_t)cc->size, sizeof(couleur24_compteur), compare_couleur24_compteur);
+
+    offset += snprintf(data + offset, data_size - offset, "couleurs:%d:", nombre_couleurs < cc->size ? nombre_couleurs : cc->size);
+    for (i = 0; i < (nombre_couleurs < cc->size ? nombre_couleurs : cc->size); i++)
+    {
+      char hex[16];
+      couleur_to_hex24(hex, sizeof(hex), &copie[i].c);
+      offset += snprintf(data + offset, data_size - offset, "%s%s", (i == 0) ? "" : ",", hex);
+    }
+
+    free(copie);
+    return;
+  }
+
+  if (cc->compte_bit == BITS32)
+  {
+    couleur32_compteur *copie = malloc(sizeof(couleur32_compteur) * (size_t)cc->size);
+    if (copie == NULL)
+    {
+      fprintf(stderr, "Erreur d'allocation pour la palette\n");
+      snprintf(data, data_size, "couleurs:0:");
+      return;
+    }
+
+    memcpy(copie, cc->cc.cc32, sizeof(couleur32_compteur) * (size_t)cc->size);
+    qsort(copie, (size_t)cc->size, sizeof(couleur32_compteur), compare_couleur32_compteur);
+
+    offset += snprintf(data + offset, data_size - offset, "couleurs:%d:", nombre_couleurs < cc->size ? nombre_couleurs : cc->size);
+    for (i = 0; i < (nombre_couleurs < cc->size ? nombre_couleurs : cc->size); i++)
+    {
+      char hex[16];
+      couleur_to_hex32(hex, sizeof(hex), &copie[i].c);
+      offset += snprintf(data + offset, data_size - offset, "%s%s", (i == 0) ? "" : ",", hex);
+    }
+
+    free(copie);
+    return;
+  }
+
+  snprintf(data, data_size, "couleurs:0:");
+}
 
 int envoie_recois_message(int socketfd)
 {
-
   char data[1024];
-  // la réinitialisation de l'ensemble des données
-  memset(data, 0, sizeof(data));
-
-  // Demandez à l'utilisateur d'entrer un message
   char message[1024];
-  printf("Votre message (max 1000 caracteres): ");
-  fgets(message, sizeof(message), stdin);
-  strcpy(data, "message: ");
-  strcat(data, message);
 
-  int write_status = write(socketfd, data, strlen(data));
-  if (write_status < 0)
+  memset(data, 0, sizeof(data));
+  printf("Votre message (max 1000 caracteres): ");
+  if (fgets(message, sizeof(message), stdin) == NULL)
   {
-    perror("erreur ecriture");
-    exit(EXIT_FAILURE);
+    return -1;
   }
 
-  // la réinitialisation de l'ensemble des données
-  memset(data, 0, sizeof(data));
+  message[strcspn(message, "\r\n")] = '\0';
 
-  // lire les données de la socket
-  int read_status = read(socketfd, data, sizeof(data));
-  if (read_status < 0)
+  memset(data, 0, sizeof(data));
+  {
+    const char *prefix = "message:";
+    size_t prefix_len = strlen(prefix);
+    size_t copy_len = strlen(message);
+
+    if (copy_len > sizeof(data) - prefix_len - 1)
+    {
+      copy_len = sizeof(data) - prefix_len - 1;
+    }
+
+    memcpy(data, prefix, prefix_len);
+    memcpy(data + prefix_len, message, copy_len);
+    data[prefix_len + copy_len] = '\0';
+  }
+
+  if (write(socketfd, data, strlen(data)) < 0)
+  {
+    perror("erreur ecriture");
+    return -1;
+  }
+
+  memset(data, 0, sizeof(data));
+  if (read(socketfd, data, sizeof(data)) < 0)
   {
     perror("erreur lecture");
     return -1;
   }
 
   printf("Message recu: %s\n", data);
-
   return 0;
 }
 
-void analyse(char *pathname, char *data)
+int envoie_couleurs(int socketfd, const char *pathname, int nombre_couleurs)
 {
-  // compte de couleurs
-  couleur_compteur *cc = analyse_bmp_image(pathname);
+  char data[4096];
 
-  int count;
-  strcpy(data, "couleurs: ");
-  char temp_string[10] = "10,";
-  if (cc->size < 10)
-  {
-    sprintf(temp_string, "%d,", cc->size);
-  }
-  strcat(data, temp_string);
-
-  // choisir 10 couleurs
-  for (count = 1; count < 11 && cc->size - count > 0; count++)
-  {
-    if (cc->compte_bit == BITS32)
-    {
-      sprintf(temp_string, "#%02x%02x%02x,", cc->cc.cc24[cc->size - count].c.rouge, cc->cc.cc32[cc->size - count].c.vert, cc->cc.cc32[cc->size - count].c.bleu);
-    }
-    if (cc->compte_bit == BITS24)
-    {
-      sprintf(temp_string, "#%02x%02x%02x,", cc->cc.cc32[cc->size - count].c.rouge, cc->cc.cc32[cc->size - count].c.vert, cc->cc.cc32[cc->size - count].c.bleu);
-    }
-    strcat(data, temp_string);
-  }
-
-  // enlever le dernier virgule
-  data[strlen(data) - 1] = '\0';
-}
-
-int envoie_couleurs(int socketfd, char *pathname)
-{
-  char data[1024];
   memset(data, 0, sizeof(data));
-  analyse(pathname, data);
+  remplir_palette_bmp(pathname, nombre_couleurs, data, sizeof(data));
 
-  int write_status = write(socketfd, data, strlen(data));
-  if (write_status < 0)
+  if (write(socketfd, data, strlen(data)) < 0)
   {
     perror("erreur ecriture");
-    exit(EXIT_FAILURE);
+    return -1;
   }
 
   return 0;
@@ -109,18 +181,24 @@ int envoie_couleurs(int socketfd, char *pathname)
 int main(int argc, char **argv)
 {
   int socketfd;
-
   struct sockaddr_in server_addr;
+  int nombre_couleurs = 10;
 
   if (argc < 2)
   {
-    printf("usage: ./client chemin_bmp_image\n");
-    return (EXIT_FAILURE);
+    printf("usage: ./client chemin_bmp_image [nombre_couleurs]\n");
+    return EXIT_FAILURE;
   }
 
-  /*
-   * Creation d'une socket
-   */
+  if (argc >= 3)
+  {
+    nombre_couleurs = atoi(argv[2]);
+    if (nombre_couleurs <= 0 || nombre_couleurs > 30)
+    {
+      nombre_couleurs = 10;
+    }
+  }
+
   socketfd = socket(AF_INET, SOCK_STREAM, 0);
   if (socketfd < 0)
   {
@@ -128,30 +206,26 @@ int main(int argc, char **argv)
     exit(EXIT_FAILURE);
   }
 
-  // détails du serveur (adresse et port)
   memset(&server_addr, 0, sizeof(server_addr));
   server_addr.sin_family = AF_INET;
   server_addr.sin_port = htons(PORT);
   server_addr.sin_addr.s_addr = INADDR_ANY;
 
-  // demande de connection au serveur
-  int connect_status = connect(socketfd, (struct sockaddr *)&server_addr, sizeof(server_addr));
-  if (connect_status < 0)
+  if (connect(socketfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
   {
     perror("connection serveur");
     exit(EXIT_FAILURE);
   }
-  if (argc != 2)
+
+  if (argc == 2)
   {
-    // envoyer et recevoir un message
-    envoie_recois_message(socketfd);
+    envoie_couleurs(socketfd, argv[1], nombre_couleurs);
   }
   else
   {
-    // envoyer et recevoir les couleurs prédominantes
-    // d'une image au format BMP (argv[1])
-    envoie_couleurs(socketfd, argv[1]);
+    envoie_couleurs(socketfd, argv[1], nombre_couleurs);
   }
 
   close(socketfd);
+  return EXIT_SUCCESS;
 }
